@@ -23,27 +23,25 @@ jobs:
       - name: Find and extract source ZIP
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           echo "Searching for Floos Shahenda ZIP..."
-          mkdir -p .ci_workspace
-          rm -rf .ci_workspace/app .ci_workspace/extracted
           mkdir -p .ci_workspace/extracted
+          rm -rf .ci_workspace/app .ci_workspace/extracted/*
 
           ZIP_FILE=""
 
-          for FILE in ./*.zip; do
-            if [ -f "$FILE" ]; then
-              ZIP_FILE="$FILE"
-            fi
-          done
+          shopt -s nullglob
+          ZIP_FILES=(./*.zip)
+          if [ "${#ZIP_FILES[@]}" -gt 0 ]; then
+            ZIP_FILE="${ZIP_FILES[0]}"
+          fi
 
           if [ -z "$ZIP_FILE" ] && [ -d "source" ]; then
-            for FILE in ./source/*.zip; do
-              if [ -f "$FILE" ]; then
-                ZIP_FILE="$FILE"
-              fi
-            done
+            ZIP_FILES=(./source/*.zip)
+            if [ "${#ZIP_FILES[@]}" -gt 0 ]; then
+              ZIP_FILE="${ZIP_FILES[0]}"
+            fi
           fi
 
           if [ -z "$ZIP_FILE" ]; then
@@ -52,8 +50,33 @@ jobs:
           fi
 
           echo "Selected ZIP: $ZIP_FILE"
-          echo "Checking ZIP..."
+          echo "Checking ZIP integrity..."
           unzip -t "$ZIP_FILE"
 
           echo "Extracting ZIP..."
-          unzip -q
+          unzip -q "$ZIP_FILE" -d .ci_workspace/extracted
+
+          echo "Searching for Flutter project..."
+
+          if [ -f ".ci_workspace/extracted/pubspec.yaml" ]; then
+            APP_DIR=".ci_workspace/extracted"
+          else
+            APP_DIR=""
+            for DIR in .ci_workspace/extracted/*; do
+              if [ -d "$DIR" ] && [ -f "$DIR/pubspec.yaml" ]; then
+                APP_DIR="$DIR"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$APP_DIR" ]; then
+            echo "ERROR: Flutter project not found inside ZIP."
+            find .ci_workspace/extracted -maxdepth 3 -type f -name pubspec.yaml -print
+            exit 1
+          fi
+
+          mv "$APP_DIR" .ci_workspace/app
+
+          echo "Flutter project detected at .ci_workspace/app"
+          echo "
