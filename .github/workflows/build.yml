@@ -28,9 +28,7 @@ jobs:
           import zipfile
           from pathlib import Path, PurePosixPath
 
-          # Accept ZIPs either at repository root or inside source/
           candidates_zips = sorted(Path('.').glob('*.zip')) + sorted(Path('source').glob('*.zip'))
-          # Remove duplicates by resolved path
           unique = []
           seen = set()
           for p in candidates_zips:
@@ -63,13 +61,10 @@ jobs:
 
                   for info in archive.infolist():
                       p = PurePosixPath(info.filename)
-
-                      # Prevent absolute paths and ../ traversal.
                       if p.is_absolute() or '..' in p.parts:
                           raise SystemExit(
                               f'ERROR: مسار غير آمن داخل ZIP: {info.filename}'
                           )
-
                       total += info.file_size
                       if total > MAX_SIZE:
                           raise SystemExit(
@@ -81,7 +76,6 @@ jobs:
           except zipfile.BadZipFile:
               raise SystemExit('ERROR: ملف ZIP غير صالح أو تالف.')
 
-          # Detect Flutter project root.
           candidates = []
 
           if (project / 'pubspec.yaml').is_file() and (project / 'lib').is_dir():
@@ -171,6 +165,25 @@ jobs:
       - name: Generate Drift database code
         working-directory: .ci_workspace/app
         run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Prepare CI smoke test
+        working-directory: .ci_workspace/app
+        run: |
+          # Remove Flutter's generated placeholder test BEFORE analysis.
+          # It expects MyApp, while this application uses FloosShahendaApp.
+          rm -f test/widget_test.dart
+          mkdir -p test
+          cat > test/smoke_test.dart <<'DART'
+          import 'package:flutter_test/flutter_test.dart';
+          import 'package:floos_shahenda/app.dart';
+
+          void main() {
+            testWidgets('Floos Shahenda app starts', (tester) async {
+              await tester.pumpWidget(const FloosShahendaApp());
+              expect(find.text('فلوس شاهندة'), findsOneWidget);
+            });
+          }
+          DART
 
       - name: Static analysis
         working-directory: .ci_workspace/app
