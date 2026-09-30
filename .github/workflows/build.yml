@@ -29,22 +29,22 @@ jobs:
           import zipfile
           from pathlib import Path, PurePosixPath
 
-          # The repository may keep previous ZIPs.
-          # Select the highest semantic version from names such as:
-          # floos_shahenda_v1.0.0.zip
-          # floos_shahenda_v1.1.0.zip
-          candidates = sorted(Path('.').glob('*.zip')) + sorted(Path('source').glob('*.zip'))
+          candidates = (
+              sorted(Path('.').glob('*.zip'))
+              + sorted(Path('source').glob('*.zip'))
+          )
 
-          versioned = []
           pattern = re.compile(
               r'^floos_shahenda_v(\d+)\.(\d+)\.(\d+)\.zip$',
               re.IGNORECASE
           )
 
+          versioned = []
+
           for p in candidates:
-              m = pattern.match(p.name)
-              if m:
-                  version = tuple(int(x) for x in m.groups())
+              match = pattern.match(p.name)
+              if match:
+                  version = tuple(int(x) for x in match.groups())
                   versioned.append((version, p))
 
           if not versioned:
@@ -53,81 +53,118 @@ jobs:
                   'floos_shahenda_vMAJOR.MINOR.PATCH.zip'
               )
 
-          versioned.sort(key=lambda item: (item[0], str(item[1])))
-
-          latest_version = versioned[-1][0]
-          latest = [p for v, p in versioned if v == latest_version]
-
-          if len(latest) > 1:
-              raise SystemExit(
-                  f'ERROR: يوجد أكثر من ZIP لنفس الإصدار '
-                  f'v{latest_version[0]}.{latest_version[1]}.{latest_version[2]}. '
-                  f'احذف/أعد تسمية النسخة المكررة قبل البناء.'
-              )
-
-          z = latest[0]
-          print(
-              f'Selected source ZIP: {z} '
-              f'(version v{latest_version[0]}.{latest_version[1]}.{latest_version[2]})'
+          versioned.sort(
+              key=lambda item: (item[0], str(item[1]))
           )
 
-          work = Path('.ci_workspace')
-          if work.exists():
-              shutil.rmtree(work)
+          latest_version = versioned[-1][0]
+          latest_files = [
+              p for version, p in versioned
+              if version == latest_version
+          ]
 
-          project = work / 'project'
-          project.mkdir(parents=True)
+          if len(latest_files) > 1:
+              raise SystemExit(
+                  'ERROR: يوجد أكثر من ZIP لنفس الإصدار.'
+              )
+
+          source_zip = latest_files[0]
+
+          print(
+              'Selected ZIP:',
+              source_zip,
+              'version:',
+              f'v{latest_version[0]}.{latest_version[1]}.{latest_version[2]}'
+          )
+
+          workspace = Path('.ci_workspace')
+
+          if workspace.exists():
+              shutil.rmtree(workspace)
+
+          project_root = workspace / 'project'
+          project_root.mkdir(parents=True)
 
           MAX_SIZE = 800 * 1024 * 1024
-          total = 0
+          total_size = 0
 
           try:
-              with zipfile.ZipFile(z) as archive:
-                  bad = archive.testzip()
-                  if bad:
-                      raise SystemExit(f'ERROR: ZIP تالف: {bad}')
+              with zipfile.ZipFile(source_zip) as archive:
+
+                  bad_file = archive.testzip()
+
+                  if bad_file:
+                      raise SystemExit(
+                          f'ERROR: ZIP تالف: {bad_file}'
+                      )
 
                   for info in archive.infolist():
-                      p = PurePosixPath(info.filename)
 
-                      if p.is_absolute() or '..' in p.parts:
+                      path = PurePosixPath(info.filename)
+
+                      if path.is_absolute() or '..' in path.parts:
                           raise SystemExit(
-                              f'ERROR: مسار غير آمن داخل ZIP: {info.filename}'
+                              f'ERROR: مسار غير آمن داخل ZIP: '
+                              f'{info.filename}'
                           )
 
-                      total += info.file_size
-                      if total > MAX_SIZE:
+                      total_size += info.file_size
+
+                      if total_size > MAX_SIZE:
                           raise SystemExit(
-                              'ERROR: الحجم بعد فك الضغط أكبر من الحد المسموح.'
+                              'ERROR: حجم المشروع بعد فك الضغط كبير جدًا.'
                           )
 
-                  archive.extractall(project)
+                  archive.extractall(project_root)
 
           except zipfile.BadZipFile:
-              raise SystemExit('ERROR: ملف ZIP غير صالح أو تالف.')
+              raise SystemExit(
+                  'ERROR: ملف ZIP غير صالح أو تالف.'
+              )
 
           roots = []
 
-          if (project / 'pubspec.yaml').is_file() and (project / 'lib').is_dir():
-              roots.append(project)
+          if (
+              (project_root / 'pubspec.yaml').is_file()
+              and (project_root / 'lib').is_dir()
+          ):
+              roots.append(project_root)
 
-          for child in project.iterdir():
-              if child.is_dir() and \
-                 (child / 'pubspec.yaml').is_file() and \
-                 (child / 'lib').is_dir():
+          for child in project_root.iterdir():
+
+              if (
+                  child.is_dir()
+                  and (child / 'pubspec.yaml').is_file()
+                  and (child / 'lib').is_dir()
+              ):
                   roots.append(child)
 
           if len(roots) != 1:
               raise SystemExit(
-                  'ERROR: لم يتم العثور على Root واحد لمشروع Flutter صالح داخل ZIP.'
+                  'ERROR: لم يتم العثور على Root واحد '
+                  'لمشروع Flutter صالح داخل ZIP.'
               )
 
-          root = roots[0]
-          app = work / 'app'
-          shutil.move(str(root), str(app))
+          detected_root = roots[0]
 
-          print('ZIP SHA256:', hashlib.sha256(z.read_bytes()).hexdigest())
-          print('Detected project root:', app)
+          app = workspace / 'app'
+
+          shutil.move(
+              str(detected_root),
+              str(app)
+          )
+
+          print(
+              'ZIP SHA256:',
+              hashlib.sha256(
+                  source_zip.read_bytes()
+              ).hexdigest()
+          )
+
+          print(
+              'Detected project root:',
+              app
+          )
           PY
 
       - name: Set up Flutter
@@ -151,44 +188,71 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import shutil
 
           android = Path('android')
-          old = 'com.floosshahenda.floos_shahenda'
-          new = 'com.floosshahenda.app'
 
-          for p in android.rglob('*'):
-              if p.is_file() and p.suffix in {'.kt', '.java', '.gradle', '.kts', '.xml'}:
-                  try:
-                      s = p.read_text(encoding='utf-8')
-                  except UnicodeDecodeError:
-                      continue
-                  if old in s:
-                      p.write_text(s.replace(old, new), encoding='utf-8')
+          old_id = 'com.floosshahenda.floos_shahenda'
+          new_id = 'com.floosshahenda.app'
 
-          old_dir = android / 'app' / 'src' / 'main' / 'kotlin' / 'com' / 'floosshahenda' / 'floos_shahenda'
-          new_dir = android / 'app' / 'src' / 'main' / 'kotlin' / 'com' / 'floosshahenda' / 'app'
+          for path in android.rglob('*'):
 
-          if old_dir.exists():
-              new_dir.parent.mkdir(parents=True, exist_ok=True)
-              if new_dir.exists():
-                  shutil.rmtree(new_dir)
-              shutil.move(str(old_dir), str(new_dir))
+              if not path.is_file():
+                  continue
+
+              if path.suffix not in {
+                  '.kt',
+                  '.java',
+                  '.gradle',
+                  '.kts',
+                  '.xml'
+              }:
+                  continue
+
+              try:
+                  text = path.read_text(
+                      encoding='utf-8'
+                  )
+              except UnicodeDecodeError:
+                  continue
+
+              if old_id in text:
+                  path.write_text(
+                      text.replace(old_id, new_id),
+                      encoding='utf-8'
+                  )
 
           found = False
-          for p in android.rglob('*'):
-              if p.is_file() and p.suffix in {'.kt', '.java', '.gradle', '.kts', '.xml'}:
-                  try:
-                      if new in p.read_text(encoding='utf-8'):
-                          found = True
-                          break
-                  except UnicodeDecodeError:
-                      pass
+
+          for path in android.rglob('*'):
+
+              if not path.is_file():
+                  continue
+
+              if path.suffix not in {
+                  '.kt',
+                  '.java',
+                  '.gradle',
+                  '.kts',
+                  '.xml'
+              }:
+                  continue
+
+              try:
+                  text = path.read_text(
+                      encoding='utf-8'
+                  )
+              except UnicodeDecodeError:
+                  continue
+
+              if new_id in text:
+                  found = True
+                  break
 
           if not found:
               raise SystemExit(
-                  'ERROR: Application ID com.floosshahenda.app '
-                  'لم يتم تثبيته في Android project.'
+                  'ERROR: Application ID '
+                  'com.floosshahenda.app '
+                  'لم يتم العثور عليه.'
               )
           PY
 
@@ -198,30 +262,40 @@ jobs:
 
       - name: Generate Drift database code
         working-directory: .ci_workspace/app
-        run: dart run build_runner build --delete-conflicting-outputs
+        run: |
+          dart run build_runner build \
+            --delete-conflicting-outputs
 
-      -       - name: Prepare CI smoke test
+      - name: Prepare CI smoke test
         working-directory: .ci_workspace/app
         run: |
           rm -f test/widget_test.dart
           mkdir -p test
+
           cat > test/smoke_test.dart <<'DART'
           import 'package:flutter_test/flutter_test.dart';
           import 'package:flutter_riverpod/flutter_riverpod.dart';
           import 'package:floos_shahenda/app.dart';
 
           void main() {
-            testWidgets('Floos Shahenda app starts', (tester) async {
-              await tester.pumpWidget(
-                const ProviderScope(
-                  child: FloosShahendaApp(),
-                ),
-              );
+            testWidgets(
+              'Floos Shahenda app starts',
+              (tester) async {
 
-              await tester.pumpAndSettle();
+                await tester.pumpWidget(
+                  const ProviderScope(
+                    child: FloosShahendaApp(),
+                  ),
+                );
 
-              expect(find.text('💰 فلوس شاهندة'), findsOneWidget);
-            });
+                await tester.pumpAndSettle();
+
+                expect(
+                  find.text('💰 فلوس شاهندة'),
+                  findsOneWidget,
+                );
+              },
+            );
           }
           DART
 
