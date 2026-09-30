@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - '*.zip'
-      - 'source/*.zip'
-      - '.github/workflows/build.yml'
+      - "*.zip"
+      - "source/*.zip"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
@@ -21,86 +21,54 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate and safely extract latest source ZIP
+        shell: bash
         run: |
-          python3 - <<'PY'
-          import hashlib
-          import re
-          import shutil
-          import zipfile
-          from pathlib import Path, PurePosixPath
+          set -euo pipefail
 
-          candidates = (
-              sorted(Path('.').glob('*.zip'))
-              + sorted(Path('source').glob('*.zip'))
-          )
+          echo "Searching for Floos Shahenda ZIP..."
 
-          pattern = re.compile(
-              r'^floos_shahenda_v(\d+)\.(\d+)\.(\d+)\.zip$',
-              re.IGNORECASE
-          )
+          mkdir -p .ci_workspace
+          rm -rf .ci_workspace/project .ci_workspace/app .ci_workspace/extracted
+          mkdir -p .ci_workspace/extracted
 
-          versioned = []
+          ZIP_FILE=""
 
-          for p in candidates:
-              if not p.is_file():
-                  continue
+          if compgen -G "*.zip" > /dev/null; then
+            ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" -printf "%f\n" | sort -V | tail -n 1)
+          fi
 
-              match = pattern.match(p.name)
+          if [ -z "$ZIP_FILE" ] && [ -d "source" ]; then
+            if compgen -G "source/*.zip" > /dev/null; then
+              ZIP_FILE=$(find source -maxdepth 1 -type f -name "*.zip" -printf "%p\n" | sort -V | tail -n 1)
+            fi
+          fi
 
-              if match:
-                  versioned.append(
-                      (tuple(map(int, match.groups())), p)
-                  )
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No source ZIP was found."
+            echo "Expected a file such as: floos_shahenda_v1.0.0.zip"
+            exit 1
+          fi
 
-          if not versioned:
-              raise SystemExit(
-                  'ERROR: لم يتم العثور على ZIP صالح باسم '
-                  'floos_shahenda_vMAJOR.MINOR.PATCH.zip'
-              )
+          echo "Selected ZIP: $ZIP_FILE"
 
-          versioned.sort(
-              key=lambda item: (item[0], str(item[1]))
-          )
+          if ! unzip -t "$ZIP_FILE" > /dev/null; then
+            echo "ERROR: ZIP file is corrupted or invalid."
+            exit 1
+          fi
 
-          latest_version = versioned[-1][0]
+          echo "Checking ZIP paths..."
 
-          latest_files = [
-              p for v, p in versioned
-              if v == latest_version
-          ]
+          if unzip -Z1 "$ZIP_FILE" | grep -E '(^/|(^|/)\.\.(\/|$))' > /dev/null; then
+            echo "ERROR: Unsafe path detected inside ZIP."
+            exit 1
+          fi
 
-          if len(latest_files) > 1:
-              raise SystemExit(
-                  'ERROR: يوجد أكثر من ZIP لنفس الإصدار.'
-              )
+          echo "Extracting ZIP..."
+          unzip -q "$ZIP_FILE" -d .ci_workspace/extracted
 
-          source_zip = latest_files[0]
+          ROOT_COUNT=0
+          APP_SOURCE=""
 
-          print('Selected ZIP:', source_zip)
-
-          workspace = Path('.ci_workspace')
-
-          if workspace.exists():
-              shutil.rmtree(workspace)
-
-          project_root = workspace / 'project'
-          project_root.mkdir(parents=True)
-
-          max_size = 800 * 1024 * 1024
-          total_size = 0
-
-          try:
-              with zipfile.ZipFile(source_zip) as archive:
-                  bad_file = archive.testzip()
-
-                  if bad_file:
-                      raise SystemExit(
-                          f'ERROR: ZIP تالف: {bad_file}'
-                      )
-
-                  for info in archive.infolist():
-                      path = PurePosixPath(info.filename)
-
-                      if path.is_absolute() or '..' in path.parts:
-                          raise SystemExit(
-                              f'ERROR: مسار غير
+          if [ -f ".ci_workspace/extracted/pubspec.yaml" ] && [ -d ".ci_workspace/extracted/lib" ]; then
+            ROOT_COUNT=1
+            APP_SOURCE=".ci_workspace/extracted
