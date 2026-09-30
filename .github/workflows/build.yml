@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - '*.zip'
       - 'source/*.zip'
       - '.github/workflows/build.yml'
 
@@ -22,46 +23,84 @@ jobs:
       - name: Validate and safely extract source ZIP
         run: |
           python3 - <<'PY'
-          import hashlib, shutil, zipfile
+          import hashlib
+          import shutil
+          import zipfile
           from pathlib import Path, PurePosixPath
 
-          source = Path('source')
-          zips = sorted(source.glob('*.zip'))
-          if len(zips) != 1:
-              raise SystemExit('ERROR: يجب وجود ملف ZIP واحد فقط داخل source/.')
-          z = zips[0]
+          # Accept ZIPs either at repository root or inside source/
+          candidates_zips = sorted(Path('.').glob('*.zip')) + sorted(Path('source').glob('*.zip'))
+          # Remove duplicates by resolved path
+          unique = []
+          seen = set()
+          for p in candidates_zips:
+              rp = p.resolve()
+              if rp not in seen:
+                  seen.add(rp)
+                  unique.append(p)
+
+          if len(unique) != 1:
+              raise SystemExit(
+                  f'ERROR: يجب وجود ملف ZIP واحد فقط في Repository '
+                  f'(الجذر أو source/). تم العثور على {len(unique)}.'
+              )
+
+          z = unique[0]
           work = Path('.ci_workspace')
-          if work.exists(): shutil.rmtree(work)
+          if work.exists():
+              shutil.rmtree(work)
           project = work / 'project'
           project.mkdir(parents=True)
 
           MAX_SIZE = 800 * 1024 * 1024
           total = 0
-          with zipfile.ZipFile(z) as archive:
-              bad = archive.testzip()
-              if bad:
-                  raise SystemExit(f'ERROR: ZIP تالف: {bad}')
-              for info in archive.infolist():
-                  p = PurePosixPath(info.filename)
-                  if p.is_absolute() or '..' in p.parts:
-                      raise SystemExit(f'ERROR: مسار غير آمن داخل ZIP: {info.filename}')
-                  total += info.file_size
-                  if total > MAX_SIZE:
-                      raise SystemExit('ERROR: الحجم بعد فك الضغط أكبر من الحد المسموح.')
-              archive.extractall(project)
 
+          try:
+              with zipfile.ZipFile(z) as archive:
+                  bad = archive.testzip()
+                  if bad:
+                      raise SystemExit(f'ERROR: ZIP تالف: {bad}')
+
+                  for info in archive.infolist():
+                      p = PurePosixPath(info.filename)
+
+                      # Prevent absolute paths and ../ traversal.
+                      if p.is_absolute() or '..' in p.parts:
+                          raise SystemExit(
+                              f'ERROR: مسار غير آمن داخل ZIP: {info.filename}'
+                          )
+
+                      total += info.file_size
+                      if total > MAX_SIZE:
+                          raise SystemExit(
+                              'ERROR: الحجم بعد فك الضغط أكبر من الحد المسموح.'
+                          )
+
+                  archive.extractall(project)
+
+          except zipfile.BadZipFile:
+              raise SystemExit('ERROR: ملف ZIP غير صالح أو تالف.')
+
+          # Detect Flutter project root.
           candidates = []
+
           if (project / 'pubspec.yaml').is_file() and (project / 'lib').is_dir():
               candidates.append(project)
+
           for child in project.iterdir():
-              if child.is_dir() and (child / 'pubspec.yaml').is_file() and (child / 'lib').is_dir():
+              if child.is_dir() and                  (child / 'pubspec.yaml').is_file() and                  (child / 'lib').is_dir():
                   candidates.append(child)
+
           if len(candidates) != 1:
-              raise SystemExit('ERROR: لم يتم العثور على Root واحد لمشروع Flutter صالح داخل ZIP.')
+              raise SystemExit(
+                  'ERROR: لم يتم العثور على Root واحد لمشروع Flutter صالح داخل ZIP.'
+              )
 
           root = candidates[0]
           app = work / 'app'
           shutil.move(str(root), str(app))
+
+          print('ZIP:', z)
           print('ZIP SHA256:', hashlib.sha256(z.read_bytes()).hexdigest())
           print('Detected project root:', app)
           PY
@@ -76,7 +115,7 @@ jobs:
         working-directory: .ci_workspace/app
         run: |
           if [ ! -d android ]; then
-            flutter create --platforms=android --org com.floosshahenda --project-name floos_shahenda .
+            flutter create               --platforms=android               --org com.floosshahenda               --project-name floos_shahenda .
           fi
 
       - name: Enforce permanent Application ID
@@ -92,24 +131,37 @@ jobs:
 
           for p in android.rglob('*'):
               if p.is_file() and p.suffix in {'.kt', '.java', '.gradle', '.kts', '.xml'}:
-                  s = p.read_text(encoding='utf-8')
+                  try:
+                      s = p.read_text(encoding='utf-8')
+                  except UnicodeDecodeError:
+                      continue
                   if old in s:
                       p.write_text(s.replace(old, new), encoding='utf-8')
 
           old_dir = android / 'app' / 'src' / 'main' / 'kotlin' / 'com' / 'floosshahenda' / 'floos_shahenda'
           new_dir = android / 'app' / 'src' / 'main' / 'kotlin' / 'com' / 'floosshahenda' / 'app'
+
           if old_dir.exists():
               new_dir.parent.mkdir(parents=True, exist_ok=True)
-              if new_dir.exists(): shutil.rmtree(new_dir)
+              if new_dir.exists():
+                  shutil.rmtree(new_dir)
               shutil.move(str(old_dir), str(new_dir))
 
-          found = []
+          found = False
           for p in android.rglob('*'):
               if p.is_file() and p.suffix in {'.kt', '.java', '.gradle', '.kts', '.xml'}:
-                  if new in p.read_text(encoding='utf-8'):
-                      found.append(str(p))
+                  try:
+                      if new in p.read_text(encoding='utf-8'):
+                          found = True
+                          break
+                  except UnicodeDecodeError:
+                      pass
+
           if not found:
-              raise SystemExit('ERROR: Application ID com.floosshahenda.app لم يتم تثبيته في Android project.')
+              raise SystemExit(
+                  'ERROR: Application ID com.floosshahenda.app '
+                  'لم يتم تثبيته في Android project.'
+              )
           PY
 
       - name: Install dependencies
