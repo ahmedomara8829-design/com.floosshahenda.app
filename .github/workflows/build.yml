@@ -23,60 +23,68 @@ jobs:
       - name: Find and extract source ZIP
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          echo "Searching for Floos Shahenda ZIP..."
+          echo 'Searching for Floos Shahenda ZIP...'
+          rm -rf .ci_workspace
           mkdir -p .ci_workspace/extracted
-          rm -rf .ci_workspace/app .ci_workspace/extracted/*
 
-          ZIP_FILE=""
-
-          shopt -s nullglob
-          ZIP_FILES=(./*.zip)
-          if [ "${#ZIP_FILES[@]}" -gt 0 ]; then
-            ZIP_FILE="${ZIP_FILES[0]}"
-          fi
-
-          if [ -z "$ZIP_FILE" ] && [ -d "source" ]; then
-            ZIP_FILES=(./source/*.zip)
-            if [ "${#ZIP_FILES[@]}" -gt 0 ]; then
-              ZIP_FILE="${ZIP_FILES[0]}"
-            fi
-          fi
+          ZIP_FILE=$(find . -maxdepth 2 -type f -name '*.zip' -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP source file found."
+            echo 'ERROR: No ZIP source file found.'
             exit 1
           fi
 
           echo "Selected ZIP: $ZIP_FILE"
-          echo "Checking ZIP integrity..."
+          echo 'Checking ZIP integrity...'
           unzip -t "$ZIP_FILE"
 
-          echo "Extracting ZIP..."
+          echo 'Extracting ZIP...'
           unzip -q "$ZIP_FILE" -d .ci_workspace/extracted
 
-          echo "Searching for Flutter project..."
+          PUBSPEC=$(find .ci_workspace/extracted -type f -name 'pubspec.yaml' -print -quit)
 
-          if [ -f ".ci_workspace/extracted/pubspec.yaml" ]; then
-            APP_DIR=".ci_workspace/extracted"
-          else
-            APP_DIR=""
-            for DIR in .ci_workspace/extracted/*; do
-              if [ -d "$DIR" ] && [ -f "$DIR/pubspec.yaml" ]; then
-                APP_DIR="$DIR"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "$APP_DIR" ]; then
-            echo "ERROR: Flutter project not found inside ZIP."
-            find .ci_workspace/extracted -maxdepth 3 -type f -name pubspec.yaml -print
+          if [ -z "$PUBSPEC" ]; then
+            echo 'ERROR: pubspec.yaml was not found inside the ZIP.'
             exit 1
           fi
 
+          APP_DIR=$(dirname "$PUBSPEC")
           mv "$APP_DIR" .ci_workspace/app
 
-          echo "Flutter project detected at .ci_workspace/app"
-          echo "
+          echo 'Flutter project detected successfully.'
+          echo "Project directory: .ci_workspace/app"
+          sha256sum "$ZIP_FILE"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -d android ]; then
+            echo 'Android folder not found. Generating it...'
+            flutter create --platforms=android --org com.floosshahenda --project-name floos_shahenda .
+          else
+            echo 'Android folder already exists.'
+          fi
+
+      - name: Set permanent Application ID
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          NEW_ID='com.floosshahenda.app'
+
+          echo "Setting Application ID to $NEW_ID"
+
+          find android -type f -name '*.kt' -o -name '*.java' -o -name '*.gradle' -o -name '*.kts' -o -name '*.xml' -exec sed -i 's/com.floosshahenda.floos_shahenda/com.floosshahenda.app/g' {} \;
+          find android -type f -name '*.kt' -o -name '*.java' -o -name '*.gradle' -o -name '*.kts' -o -name '*.xml' -exec sed
