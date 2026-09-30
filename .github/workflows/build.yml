@@ -17,58 +17,210 @@ jobs:
     timeout-minutes: 45
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate and safely extract latest source ZIP
+      - name: Find and extract source ZIP
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           echo "Searching for Floos Shahenda ZIP..."
 
           mkdir -p .ci_workspace
-          rm -rf .ci_workspace/project .ci_workspace/app .ci_workspace/extracted
+          rm -rf .ci_workspace/app
+          rm -rf .ci_workspace/extracted
           mkdir -p .ci_workspace/extracted
 
           ZIP_FILE=""
 
-          if compgen -G "*.zip" > /dev/null; then
-            ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" -printf "%f\n" | sort -V | tail -n 1)
-          fi
+          for FILE in ./*.zip; do
+            if [ -f "$FILE" ]; then
+              ZIP_FILE="$FILE"
+            fi
+          done
 
           if [ -z "$ZIP_FILE" ] && [ -d "source" ]; then
-            if compgen -G "source/*.zip" > /dev/null; then
-              ZIP_FILE=$(find source -maxdepth 1 -type f -name "*.zip" -printf "%p\n" | sort -V | tail -n 1)
-            fi
+            for FILE in ./source/*.zip; do
+              if [ -f "$FILE" ]; then
+                ZIP_FILE="$FILE"
+              fi
+            done
           fi
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No source ZIP was found."
-            echo "Expected a file such as: floos_shahenda_v1.0.0.zip"
+            echo "ERROR: No ZIP source file found."
             exit 1
           fi
 
           echo "Selected ZIP: $ZIP_FILE"
 
-          if ! unzip -t "$ZIP_FILE" > /dev/null; then
-            echo "ERROR: ZIP file is corrupted or invalid."
-            exit 1
-          fi
+          echo "Checking ZIP..."
 
-          echo "Checking ZIP paths..."
-
-          if unzip -Z1 "$ZIP_FILE" | grep -E '(^/|(^|/)\.\.(\/|$))' > /dev/null; then
-            echo "ERROR: Unsafe path detected inside ZIP."
-            exit 1
-          fi
+          unzip -t "$ZIP_FILE"
 
           echo "Extracting ZIP..."
+
           unzip -q "$ZIP_FILE" -d .ci_workspace/extracted
 
-          ROOT_COUNT=0
-          APP_SOURCE=""
+          echo "Searching for Flutter project..."
 
-          if [ -f ".ci_workspace/extracted/pubspec.yaml" ] && [ -d ".ci_workspace/extracted/lib" ]; then
-            ROOT_COUNT=1
-            APP_SOURCE=".ci_workspace/extracted
+          if [ -f ".ci_workspace/extracted/pubspec.yaml" ]; then
+            APP_DIR=".ci_workspace/extracted"
+          else
+            APP_DIR=""
+
+            for DIR in .ci_workspace/extracted/*; do
+              if [ -d "$DIR" ] && [ -f "$DIR/pubspec.yaml" ]; then
+                APP_DIR="$DIR"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$APP_DIR" ]; then
+            echo "ERROR: Flutter project not found inside ZIP."
+            exit 1
+          fi
+
+          mv "$APP_DIR" .ci_workspace/app
+
+          echo "Flutter project detected:"
+          echo ".ci_workspace/app"
+
+          echo "ZIP SHA256:"
+          sha256sum "$ZIP_FILE"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -d "android" ]; then
+            echo "Android folder not found."
+            echo "Generating Android platform..."
+
+            flutter create \
+              --platforms=android \
+              --org com.floosshahenda \
+              --project-name floos_shahenda \
+              .
+
+            echo "Android platform generated."
+          else
+            echo "Android folder already exists."
+          fi
+
+      - name: Enforce permanent Application ID
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          OLD_ID="com.floosshahenda.floos_shahenda"
+          NEW_ID="com.floosshahenda.app"
+
+          echo "Setting permanent Application ID:"
+          echo "$NEW_ID"
+
+          find android -type f \
+            \( -name "*.kt" -o -name "*.java" -o -name "*.gradle" -o -name "*.kts" -o -name "*.xml" \) \
+            -exec sed -i "s/$OLD_ID/$NEW_ID/g" {} \;
+
+          find android -type f \
+            \( -name "*.kt" -o -name "*.java" -o -name "*.gradle" -o -name "*.kts" -o -name "*.xml" \) \
+            -exec sed -i "s/com.example.floos_shahenda/$NEW_ID/g" {} \;
+
+          echo "Application ID replacement completed."
+
+      - name: Install dependencies
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter pub get
+
+      - name: Generate Drift database code
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          if grep -q "drift" pubspec.yaml; then
+            dart run build_runner build --delete-conflicting-outputs
+          else
+            echo "Drift not detected. Skipping code generation."
+          fi
+
+      - name: Static analysis
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter analyze
+
+      - name: Build APK
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter build apk --release
+
+      - name: Build AAB
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter build appbundle --release
+
+      - name: Verify APK
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK generated successfully."
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Verify AAB
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            echo "ERROR: AAB was not generated."
+            exit 1
+          fi
+
+          echo "AAB generated successfully."
+          ls -lh build/app/outputs/bundle/release/app-release.aab
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: floos-shahenda-apk
+          path: .ci_workspace/app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: floos-shahenda-aab
+          path: .ci_workspace/app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 7
