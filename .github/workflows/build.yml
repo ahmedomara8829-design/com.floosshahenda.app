@@ -200,18 +200,26 @@ jobs:
         working-directory: .ci_workspace/app
         run: dart run build_runner build --delete-conflicting-outputs
 
-      - name: Prepare CI smoke test
+      -       - name: Prepare CI smoke test
         working-directory: .ci_workspace/app
         run: |
           rm -f test/widget_test.dart
           mkdir -p test
           cat > test/smoke_test.dart <<'DART'
           import 'package:flutter_test/flutter_test.dart';
+          import 'package:flutter_riverpod/flutter_riverpod.dart';
           import 'package:floos_shahenda/app.dart';
 
           void main() {
             testWidgets('Floos Shahenda app starts', (tester) async {
-              await tester.pumpWidget(const FloosShahendaApp());
+              await tester.pumpWidget(
+                const ProviderScope(
+                  child: FloosShahendaApp(),
+                ),
+              );
+
+              await tester.pumpAndSettle();
+
               expect(find.text('💰 فلوس شاهندة'), findsOneWidget);
             });
           }
