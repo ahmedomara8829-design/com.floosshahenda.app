@@ -40,12 +40,17 @@ jobs:
           )
 
           versioned = []
+
           for p in candidates:
               if not p.is_file():
                   continue
+
               match = pattern.match(p.name)
+
               if match:
-                  versioned.append((tuple(map(int, match.groups())), p))
+                  versioned.append(
+                      (tuple(map(int, match.groups())), p)
+                  )
 
           if not versioned:
               raise SystemExit(
@@ -53,17 +58,28 @@ jobs:
                   'floos_shahenda_vMAJOR.MINOR.PATCH.zip'
               )
 
-          versioned.sort(key=lambda item: (item[0], str(item[1])))
+          versioned.sort(
+              key=lambda item: (item[0], str(item[1]))
+          )
+
           latest_version = versioned[-1][0]
-          latest_files = [p for v, p in versioned if v == latest_version]
+
+          latest_files = [
+              p for v, p in versioned
+              if v == latest_version
+          ]
 
           if len(latest_files) > 1:
-              raise SystemExit('ERROR: يوجد أكثر من ZIP لنفس الإصدار.')
+              raise SystemExit(
+                  'ERROR: يوجد أكثر من ZIP لنفس الإصدار.'
+              )
 
           source_zip = latest_files[0]
+
           print('Selected ZIP:', source_zip)
 
           workspace = Path('.ci_workspace')
+
           if workspace.exists():
               shutil.rmtree(workspace)
 
@@ -76,128 +92,15 @@ jobs:
           try:
               with zipfile.ZipFile(source_zip) as archive:
                   bad_file = archive.testzip()
+
                   if bad_file:
-                      raise SystemExit(f'ERROR: ZIP تالف: {bad_file}')
+                      raise SystemExit(
+                          f'ERROR: ZIP تالف: {bad_file}'
+                      )
 
                   for info in archive.infolist():
                       path = PurePosixPath(info.filename)
 
                       if path.is_absolute() or '..' in path.parts:
                           raise SystemExit(
-                              f'ERROR: مسار غير آمن داخل ZIP: {info.filename}'
-                          )
-
-                      total_size += info.file_size
-
-                      if total_size > max_size:
-                          raise SystemExit(
-                              'ERROR: الحجم بعد فك الضغط أكبر من الحد المسموح.'
-                          )
-
-                  archive.extractall(project_root)
-
-          except zipfile.BadZipFile:
-              raise SystemExit('ERROR: ملف ZIP غير صالح أو تالف.')
-
-          roots = []
-
-          if (
-              (project_root / 'pubspec.yaml').is_file()
-              and (project_root / 'lib').is_dir()
-          ):
-              roots.append(project_root)
-
-          for child in project_root.iterdir():
-              if (
-                  child.is_dir()
-                  and (child / 'pubspec.yaml').is_file()
-                  and (child / 'lib').is_dir()
-              ):
-                  roots.append(child)
-
-          if len(roots) != 1:
-              raise SystemExit(
-                  'ERROR: لم يتم العثور على Root واحد لمشروع Flutter صالح داخل ZIP.'
-              )
-
-          app = workspace / 'app'
-          shutil.move(str(roots[0]), str(app))
-
-          print(
-              'ZIP SHA256:',
-              hashlib.sha256(source_zip.read_bytes()).hexdigest()
-          )
-
-          print('Detected project root:', app)
-          PY
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Generate Android platform if needed
-        working-directory: .ci_workspace/app
-        run: |
-          if [ ! -d android ]; then
-            flutter create \
-              --platforms=android \
-              --org com.floosshahenda \
-              --project-name floos_shahenda .
-          fi
-
-      - name: Enforce permanent Application ID
-        working-directory: .ci_workspace/app
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          android = Path('android')
-          old_id = 'com.floosshahenda.floos_shahenda'
-          new_id = 'com.floosshahenda.app'
-
-          for path in android.rglob('*'):
-              if not path.is_file() or path.suffix not in {
-                  '.kt', '.java', '.gradle', '.kts', '.xml'
-              }:
-                  continue
-
-              try:
-                  text = path.read_text(encoding='utf-8')
-              except UnicodeDecodeError:
-                  continue
-
-              if old_id in text:
-                  path.write_text(
-                      text.replace(old_id, new_id),
-                      encoding='utf-8'
-                  )
-
-          found = any(
-              new_id in path.read_text(
-                  encoding='utf-8',
-                  errors='ignore'
-              )
-              for path in android.rglob('*')
-              if path.is_file()
-              and path.suffix in {
-                  '.kt', '.java', '.gradle', '.kts', '.xml'
-              }
-          )
-
-          if not found:
-              raise SystemExit(
-                  'ERROR: Application ID com.floosshahenda.app '
-                  'لم يتم العثور عليه داخل مشروع Android.'
-              )
-          PY
-
-      - name: Install dependencies
-        working-directory: .ci_workspace/app
-        run: flutter pub get
-
-      - name: Generate Drift database code
-        working-directory: .ci_workspace/app
-        run: |
-         
+                              f'ERROR: مسار غير
