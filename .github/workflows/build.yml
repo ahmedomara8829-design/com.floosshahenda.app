@@ -170,7 +170,7 @@ jobs:
         working-directory: .ci_workspace/app
         run: |
           # Remove Flutter's generated placeholder test BEFORE analysis.
-          # It expects MyApp, while this application uses FloosShahendaApp.
+          # The dashboard AppBar title includes the money emoji.
           rm -f test/widget_test.dart
           mkdir -p test
           cat > test/smoke_test.dart <<'DART'
@@ -180,7 +180,7 @@ jobs:
           void main() {
             testWidgets('Floos Shahenda app starts', (tester) async {
               await tester.pumpWidget(const FloosShahendaApp());
-              expect(find.text('فلوس شاهندة'), findsOneWidget);
+              expect(find.text('💰 فلوس شاهندة'), findsOneWidget);
             });
           }
           DART
