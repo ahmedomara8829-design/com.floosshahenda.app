@@ -20,33 +20,61 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate and safely extract source ZIP
+      - name: Validate and safely extract latest source ZIP
         run: |
           python3 - <<'PY'
           import hashlib
+          import re
           import shutil
           import zipfile
           from pathlib import Path, PurePosixPath
 
-          candidates_zips = sorted(Path('.').glob('*.zip')) + sorted(Path('source').glob('*.zip'))
-          unique = []
-          seen = set()
-          for p in candidates_zips:
-              rp = p.resolve()
-              if rp not in seen:
-                  seen.add(rp)
-                  unique.append(p)
+          # The repository may keep previous ZIPs.
+          # Select the highest semantic version from names such as:
+          # floos_shahenda_v1.0.0.zip
+          # floos_shahenda_v1.1.0.zip
+          candidates = sorted(Path('.').glob('*.zip')) + sorted(Path('source').glob('*.zip'))
 
-          if len(unique) != 1:
+          versioned = []
+          pattern = re.compile(
+              r'^floos_shahenda_v(\d+)\.(\d+)\.(\d+)\.zip$',
+              re.IGNORECASE
+          )
+
+          for p in candidates:
+              m = pattern.match(p.name)
+              if m:
+                  version = tuple(int(x) for x in m.groups())
+                  versioned.append((version, p))
+
+          if not versioned:
               raise SystemExit(
-                  f'ERROR: يجب وجود ملف ZIP واحد فقط في Repository '
-                  f'(الجذر أو source/). تم العثور على {len(unique)}.'
+                  'ERROR: لم يتم العثور على ZIP صالح باسم '
+                  'floos_shahenda_vMAJOR.MINOR.PATCH.zip'
               )
 
-          z = unique[0]
+          versioned.sort(key=lambda item: (item[0], str(item[1])))
+
+          latest_version = versioned[-1][0]
+          latest = [p for v, p in versioned if v == latest_version]
+
+          if len(latest) > 1:
+              raise SystemExit(
+                  f'ERROR: يوجد أكثر من ZIP لنفس الإصدار '
+                  f'v{latest_version[0]}.{latest_version[1]}.{latest_version[2]}. '
+                  f'احذف/أعد تسمية النسخة المكررة قبل البناء.'
+              )
+
+          z = latest[0]
+          print(
+              f'Selected source ZIP: {z} '
+              f'(version v{latest_version[0]}.{latest_version[1]}.{latest_version[2]})'
+          )
+
           work = Path('.ci_workspace')
           if work.exists():
               shutil.rmtree(work)
+
           project = work / 'project'
           project.mkdir(parents=True)
 
@@ -61,10 +89,12 @@ jobs:
 
                   for info in archive.infolist():
                       p = PurePosixPath(info.filename)
+
                       if p.is_absolute() or '..' in p.parts:
                           raise SystemExit(
                               f'ERROR: مسار غير آمن داخل ZIP: {info.filename}'
                           )
+
                       total += info.file_size
                       if total > MAX_SIZE:
                           raise SystemExit(
@@ -76,25 +106,26 @@ jobs:
           except zipfile.BadZipFile:
               raise SystemExit('ERROR: ملف ZIP غير صالح أو تالف.')
 
-          candidates = []
+          roots = []
 
           if (project / 'pubspec.yaml').is_file() and (project / 'lib').is_dir():
-              candidates.append(project)
+              roots.append(project)
 
           for child in project.iterdir():
-              if child.is_dir() and                  (child / 'pubspec.yaml').is_file() and                  (child / 'lib').is_dir():
-                  candidates.append(child)
+              if child.is_dir() and \
+                 (child / 'pubspec.yaml').is_file() and \
+                 (child / 'lib').is_dir():
+                  roots.append(child)
 
-          if len(candidates) != 1:
+          if len(roots) != 1:
               raise SystemExit(
                   'ERROR: لم يتم العثور على Root واحد لمشروع Flutter صالح داخل ZIP.'
               )
 
-          root = candidates[0]
+          root = roots[0]
           app = work / 'app'
           shutil.move(str(root), str(app))
 
-          print('ZIP:', z)
           print('ZIP SHA256:', hashlib.sha256(z.read_bytes()).hexdigest())
           print('Detected project root:', app)
           PY
@@ -109,7 +140,10 @@ jobs:
         working-directory: .ci_workspace/app
         run: |
           if [ ! -d android ]; then
-            flutter create               --platforms=android               --org com.floosshahenda               --project-name floos_shahenda .
+            flutter create \
+              --platforms=android \
+              --org com.floosshahenda \
+              --project-name floos_shahenda .
           fi
 
       - name: Enforce permanent Application ID
@@ -169,8 +203,6 @@ jobs:
       - name: Prepare CI smoke test
         working-directory: .ci_workspace/app
         run: |
-          # Remove Flutter's generated placeholder test BEFORE analysis.
-          # The dashboard AppBar title includes the money emoji.
           rm -f test/widget_test.dart
           mkdir -p test
           cat > test/smoke_test.dart <<'DART'
