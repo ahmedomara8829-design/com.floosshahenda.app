@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "*.zip"
-      - "source/*.zip"
-      - ".github/workflows/build.yml"
+      - '*.zip'
+      - 'source/*.zip'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
@@ -17,7 +17,6 @@ jobs:
     timeout-minutes: 45
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -27,10 +26,8 @@ jobs:
           set -e
 
           echo "Searching for Floos Shahenda ZIP..."
-
           mkdir -p .ci_workspace
-          rm -rf .ci_workspace/app
-          rm -rf .ci_workspace/extracted
+          rm -rf .ci_workspace/app .ci_workspace/extracted
           mkdir -p .ci_workspace/extracted
 
           ZIP_FILE=""
@@ -55,172 +52,8 @@ jobs:
           fi
 
           echo "Selected ZIP: $ZIP_FILE"
-
           echo "Checking ZIP..."
-
           unzip -t "$ZIP_FILE"
 
           echo "Extracting ZIP..."
-
-          unzip -q "$ZIP_FILE" -d .ci_workspace/extracted
-
-          echo "Searching for Flutter project..."
-
-          if [ -f ".ci_workspace/extracted/pubspec.yaml" ]; then
-            APP_DIR=".ci_workspace/extracted"
-          else
-            APP_DIR=""
-
-            for DIR in .ci_workspace/extracted/*; do
-              if [ -d "$DIR" ] && [ -f "$DIR/pubspec.yaml" ]; then
-                APP_DIR="$DIR"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "$APP_DIR" ]; then
-            echo "ERROR: Flutter project not found inside ZIP."
-            exit 1
-          fi
-
-          mv "$APP_DIR" .ci_workspace/app
-
-          echo "Flutter project detected:"
-          echo ".ci_workspace/app"
-
-          echo "ZIP SHA256:"
-          sha256sum "$ZIP_FILE"
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Generate Android platform
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-
-          if [ ! -d "android" ]; then
-            echo "Android folder not found."
-            echo "Generating Android platform..."
-
-            flutter create \
-              --platforms=android \
-              --org com.floosshahenda \
-              --project-name floos_shahenda \
-              .
-
-            echo "Android platform generated."
-          else
-            echo "Android folder already exists."
-          fi
-
-      - name: Enforce permanent Application ID
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-
-          OLD_ID="com.floosshahenda.floos_shahenda"
-          NEW_ID="com.floosshahenda.app"
-
-          echo "Setting permanent Application ID:"
-          echo "$NEW_ID"
-
-          find android -type f \
-            \( -name "*.kt" -o -name "*.java" -o -name "*.gradle" -o -name "*.kts" -o -name "*.xml" \) \
-            -exec sed -i "s/$OLD_ID/$NEW_ID/g" {} \;
-
-          find android -type f \
-            \( -name "*.kt" -o -name "*.java" -o -name "*.gradle" -o -name "*.kts" -o -name "*.xml" \) \
-            -exec sed -i "s/com.example.floos_shahenda/$NEW_ID/g" {} \;
-
-          echo "Application ID replacement completed."
-
-      - name: Install dependencies
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-          flutter pub get
-
-      - name: Generate Drift database code
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-
-          if grep -q "drift" pubspec.yaml; then
-            dart run build_runner build --delete-conflicting-outputs
-          else
-            echo "Drift not detected. Skipping code generation."
-          fi
-
-      - name: Static analysis
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-          flutter analyze
-
-      - name: Build APK
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-          flutter build apk --release
-
-      - name: Build AAB
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-          flutter build appbundle --release
-
-      - name: Verify APK
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-
-          if [ ! -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
-
-          echo "APK generated successfully."
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
-
-      - name: Verify AAB
-        working-directory: .ci_workspace/app
-        shell: bash
-        run: |
-          set -e
-
-          if [ ! -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-            echo "ERROR: AAB was not generated."
-            exit 1
-          fi
-
-          echo "AAB generated successfully."
-          ls -lh build/app/outputs/bundle/release/app-release.aab
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: floos-shahenda-apk
-          path: .ci_workspace/app/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload AAB
-        uses: actions/upload-artifact@v4
-        with:
-          name: floos-shahenda-aab
-          path: .ci_workspace/app/build/app/outputs/bundle/release/app-release.aab
-          if-no-files-found: error
-          retention-days: 7
+          unzip -q
