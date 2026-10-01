@@ -86,5 +86,79 @@ jobs:
 
           echo "Setting Application ID to $NEW_ID"
 
-          find android -type f -name '*.kt' -o -name '*.java' -o -name '*.gradle' -o -name '*.kts' -o -name '*.xml' -exec sed -i 's/com.floosshahenda.floos_shahenda/com.floosshahenda.app/g' {} \;
-          find android -type f -name '*.kt' -o -name '*.java' -o -name '*.gradle' -o -name '*.kts' -o -name '*.xml' -exec sed
+          find android -type f \( -name '*.kt' -o -name '*.java' -o -name '*.gradle' -o -name '*.kts' -o -name '*.xml' \) -exec sed -i 's/com.floosshahenda.floos_shahenda/com.floosshahenda.app/g' {} \;
+          find android -type f \( -name '*.kt' -o -name '*.java' -o -name '*.gradle' -o -name '*.kts' -o -name '*.xml' \) -exec sed -i 's/com.example.floos_shahenda/com.floosshahenda.app/g' {} \;
+
+      - name: Install dependencies
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter pub get
+
+      - name: Generate Drift database code
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+
+          if grep -q 'drift' pubspec.yaml; then
+            dart run build_runner build --delete-conflicting-outputs
+          else
+            echo 'Drift not detected. Skipping code generation.'
+          fi
+
+      - name: Static analysis
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter analyze lib
+
+      - name: Build APK
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter build apk --release
+
+      - name: Build AAB
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          flutter build appbundle --release
+
+      - name: Verify APK
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          echo 'APK generated successfully.'
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Verify AAB
+        working-directory: .ci_workspace/app
+        shell: bash
+        run: |
+          set -e
+          test -f build/app/outputs/bundle/release/app-release.aab
+          echo 'AAB generated successfully.'
+          ls -lh build/app/outputs/bundle/release/app-release.aab
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: floos-shahenda-apk
+          path: .ci_workspace/app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: floos-shahenda-aab
+          path: .ci_workspace/app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 7
